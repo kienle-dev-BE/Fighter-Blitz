@@ -9,6 +9,8 @@ import {
   subCountForMain,
   enemyPoolForMain,
   BOSS_WARNING_DURATION_MS,
+  PLAYER_AUTOFIRE_INTERVAL_MS,
+  PLAYER_TOUCH_DRAG_SCALE,
   EnemyType,
 } from "./constants";
 import {
@@ -70,6 +72,18 @@ export class GameManager {
   /** Pointer position in canvas pixel space (matches internal resolution). */
   private pointerCanvasX = CANVAS_WIDTH / 2;
   private pointerCanvasY = CANVAS_HEIGHT - 80;
+
+  /** Touch: drag delta from first contact (anchor); auto-fire. */
+  private mobileControlsActive = false;
+  /** True while finger down — ship = grab-start position + (finger − anchor). */
+  private mobileTouchActive = false;
+  private touchAnchorCanvasX = 0;
+  private touchAnchorCanvasY = 0;
+  private playerAtTouchStartX = 0;
+  private playerAtTouchStartY = 0;
+  /** Desktop: left button held on canvas → repeat fire at `PLAYER_AUTOFIRE_INTERVAL_MS`. */
+  private mousePrimaryHeld = false;
+  private lastAutofireAt = 0;
   private lastEnemySpawn = 0;
   /** Formation pattern and entry edge rotation. */
   private formationWaveIndex = 0;
@@ -109,6 +123,12 @@ export class GameManager {
 
   // ─── Public API ──────────────────────────────────────────────────────────
 
+  /** Touch mode: anchored drag + auto-fire (coarse pointer / phones). */
+  setMobileControlsActive(active: boolean) {
+    this.mobileControlsActive = active;
+    if (!active) this.mobileTouchActive = false;
+  }
+
   startGame() {
     this.highScore = this._readHighScore();
     this.score = 0;
@@ -119,6 +139,9 @@ export class GameManager {
     this.player = new Player(CANVAS_WIDTH, CANVAS_HEIGHT);
     this.pointerCanvasX = this.player.x;
     this.pointerCanvasY = this.player.y;
+    this.mobileTouchActive = false;
+    this.mousePrimaryHeld = false;
+    this.lastAutofireAt = 0;
     this.playerBullets = [];
     this.enemyBullets = [];
     this.enemies = [];
@@ -177,11 +200,15 @@ export class GameManager {
   private _bindPointer() {
     this.canvas.addEventListener("pointermove", this._onPointerMove, { passive: true });
     this.canvas.addEventListener("pointerdown", this._onPointerDown, { passive: true });
+    this.canvas.addEventListener("pointerup", this._onPointerUp, { passive: true });
+    this.canvas.addEventListener("pointercancel", this._onPointerUp, { passive: true });
   }
 
   private _unbindPointer() {
     this.canvas.removeEventListener("pointermove", this._onPointerMove);
     this.canvas.removeEventListener("pointerdown", this._onPointerDown);
+    this.canvas.removeEventListener("pointerup", this._onPointerUp);
+    this.canvas.removeEventListener("pointercancel", this._onPointerUp);
   }
 
   private _bindKeyboard() {
@@ -222,6 +249,7 @@ export class GameManager {
 
   private _onPointerMove = (e: PointerEvent) => {
     if (this.state !== "playing") return;
+    if (this.mobileControlsActive && !this.mobileTouchActive) return;
     this._syncPointerFromEvent(e);
   };
 
@@ -231,7 +259,34 @@ export class GameManager {
     if (this.playerDeathUntil > 0) return;
     if (e.pointerType === "mouse" && e.button !== 0) return;
     this._syncPointerFromEvent(e);
+    if (this.mobileControlsActive) {
+      this.mobileTouchActive = true;
+      this.touchAnchorCanvasX = this.pointerCanvasX;
+      this.touchAnchorCanvasY = this.pointerCanvasY;
+      this.playerAtTouchStartX = this.player.x;
+      this.playerAtTouchStartY = this.player.y;
+      if (e.pointerType !== "mouse") {
+        try {
+          this.canvas.setPointerCapture(e.pointerId);
+        } catch {
+          /* ignore */
+        }
+      }
+      return;
+    }
+    this.mousePrimaryHeld = true;
     this._firePlayer();
+    this.lastAutofireAt = Date.now();
+  };
+
+  private _onPointerUp = (e: PointerEvent) => {
+    if (this.mobileControlsActive) this.mobileTouchActive = false;
+    else if (e.button === 0) this.mousePrimaryHeld = false;
+    try {
+      this.canvas.releasePointerCapture(e.pointerId);
+    } catch {
+      /* not captured */
+    }
   };
 
   private _bossTransitionActive(): boolean {
@@ -241,6 +296,28 @@ export class GameManager {
   private _handleInput() {
     const p = this.player;
     if (!p) return;
+    if (this.mobileControlsActive) {
+      if (!this.mobileTouchActive) return;
+      const dx =
+        (this.pointerCanvasX - this.touchAnchorCanvasX) * PLAYER_TOUCH_DRAG_SCALE;
+      const dy =
+        (this.pointerCanvasY - this.touchAnchorCanvasY) * PLAYER_TOUCH_DRAG_SCALE;
+      p.x = Math.max(
+        p.width / 2,
+        Math.min(
+          CANVAS_WIDTH - p.width / 2,
+          this.playerAtTouchStartX + dx,
+        ),
+      );
+      p.y = Math.max(
+        p.height / 2,
+        Math.min(
+          CANVAS_HEIGHT - p.height / 2,
+          this.playerAtTouchStartY + dy,
+        ),
+      );
+      return;
+    }
     p.x = Math.max(
       p.width / 2,
       Math.min(CANVAS_WIDTH - p.width / 2, this.pointerCanvasX),
@@ -634,6 +711,7 @@ export class GameManager {
   }
 
   private _victory() {
+    this.mousePrimaryHeld = false;
     this.state = "victory";
     if (this.score >= this.highScore) {
       this.highScore = this.score;
@@ -759,6 +837,7 @@ export class GameManager {
   }
 
   private _gameOver(fromPlayerDeath = false) {
+    this.mousePrimaryHeld = false;
     if (fromPlayerDeath) {
       playGameOverImpact();
     }
@@ -829,6 +908,18 @@ export class GameManager {
     }
 
     this._handleInput();
+
+    const autofireActive =
+      this.mobileControlsActive ||
+      (!this.mobileControlsActive && this.mousePrimaryHeld);
+    if (autofireActive) {
+      const now = Date.now();
+      if (now - this.lastAutofireAt >= PLAYER_AUTOFIRE_INTERVAL_MS) {
+        this.lastAutofireAt = now;
+        this._firePlayer();
+      }
+    }
+
     this._enemyShoot();
 
     if (this.boss?.active && this.player) {

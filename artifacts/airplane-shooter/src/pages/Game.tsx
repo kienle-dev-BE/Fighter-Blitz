@@ -8,6 +8,12 @@ import { preloadPlayerSprite } from "../game/playerSprite";
 import logoImg from "../assets/Logo/logo.png";
 import menuBgImg from "../assets/Logo/BG.png";
 
+function prefersTouchGameControls(): boolean {
+  if (typeof window === "undefined") return false;
+  if (window.matchMedia("(pointer: coarse)").matches) return true;
+  return window.matchMedia("(hover: none)").matches && navigator.maxTouchPoints > 0;
+}
+
 // ─── HUD Components ──────────────────────────────────────────────────────────
 
 function HeartBar({ hp, maxHp }: { hp: number; maxHp: number }) {
@@ -102,7 +108,13 @@ function HUDOverlay({ hud }: { hud: HUD }) {
 
 // ─── Start Screen ────────────────────────────────────────────────────────────
 
-function StartScreen({ onStart, highScore }: { onStart: () => void; highScore: number }) {
+function StartScreen({
+  onStart, highScore, showTouchUi,
+}: {
+  onStart: () => void;
+  highScore: number;
+  showTouchUi: boolean;
+}) {
   return (
     <div style={{
       position: "absolute", inset: 0,
@@ -136,8 +148,17 @@ function StartScreen({ onStart, highScore }: { onStart: () => void; highScore: n
       </div>
 
       <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#88aacc", textAlign: "center", letterSpacing: 1 }}>
-        <div><span style={{ color: "#5bc0eb" }}>MOUSE</span> — Move ship</div>
-        <div><span style={{ color: "#5bc0eb" }}>CLICK</span> — Shoot (faster clicks = faster fire)</div>
+        {showTouchUi ? (
+          <>
+            <div><span style={{ color: "#5bc0eb" }}>TOUCH & DRAG</span> — First touch = anchor; drag adds movement (ship won't sit under finger)</div>
+            <div><span style={{ color: "#5bc0eb" }}>AUTO-FIRE</span> — Ship shoots continuously</div>
+          </>
+        ) : (
+          <>
+            <div><span style={{ color: "#5bc0eb" }}>MOUSE</span> — Move ship</div>
+            <div><span style={{ color: "#5bc0eb" }}>CLICK / HOLD</span> — Shoot; hold button for continuous fire</div>
+          </>
+        )}
         <div><span style={{ color: "#2ecc71" }}>Gems</span> — shield, heal, gun power 0–{MAX_GUN_LEVEL} (fan ≤5)</div>
         <div style={{ marginTop: 4, fontSize: 11, color: "#6688aa", maxWidth: 380 }}>
           <span style={{ color: "#7ab0ff" }}>10 main levels</span> — waves like 1-1, 1-2… — clear each wave, then fight the boss (boss-01…10)
@@ -326,6 +347,24 @@ export default function Game() {
   const [highScore, setHighScore] = useState(0);
   /** Increments on each real damage hit so the red vignette remounts and replays. */
   const [damageFlashKey, setDamageFlashKey] = useState(0);
+  const [useMobileUi, setUseMobileUi] = useState(prefersTouchGameControls);
+
+  useEffect(() => {
+    const mqCoarse = window.matchMedia("(pointer: coarse)");
+    const mqHover = window.matchMedia("(hover: none)");
+    const sync = () => setUseMobileUi(prefersTouchGameControls());
+    sync();
+    mqCoarse.addEventListener("change", sync);
+    mqHover.addEventListener("change", sync);
+    return () => {
+      mqCoarse.removeEventListener("change", sync);
+      mqHover.removeEventListener("change", sync);
+    };
+  }, []);
+
+  useEffect(() => {
+    managerRef.current?.setMobileControlsActive(useMobileUi);
+  }, [useMobileUi]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -336,6 +375,7 @@ export default function Game() {
 
     const manager = new GameManager(canvas);
     managerRef.current = manager;
+    manager.setMobileControlsActive(prefersTouchGameControls());
     setHighScore(parseInt(localStorage.getItem("planeShooterHigh") || "0"));
     preloadEnemySprites().catch(() => {});
     preloadBossSprites().catch(() => {});
@@ -443,8 +483,9 @@ export default function Game() {
 
         {/* Screens */}
         {gameState === "start" && (
-          <StartScreen onStart={handleStart} highScore={highScore} />
+          <StartScreen onStart={handleStart} highScore={highScore} showTouchUi={useMobileUi} />
         )}
+
         {gameState === "gameover" && (
           <GameOverScreen
             score={finalScore}

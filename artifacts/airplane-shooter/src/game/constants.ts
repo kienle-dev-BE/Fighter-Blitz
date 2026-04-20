@@ -3,6 +3,10 @@ export const CANVAS_WIDTH = 480;
 export const CANVAS_HEIGHT = 720;
 
 export const PLAYER_SPEED = 5;
+/** Touch drag: ship offset = finger delta (canvas px) × this (1 = 1:1). */
+export const PLAYER_TOUCH_DRAG_SCALE = 1;
+/** Auto-fire while touch mode or while desktop mouse button held (ms). */
+export const PLAYER_AUTOFIRE_INTERVAL_MS = 150;
 /** Hitbox / draw size (matches `layer.png` aspect ~2:3). */
 export const PLAYER_WIDTH = 30;
 export const PLAYER_HEIGHT = 46;
